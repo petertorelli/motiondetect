@@ -5,7 +5,7 @@ filename=$1
 URL="https://www.repete.io"
 TOKEN_ENDPOINT="${URL}/liddycam/_token"
 POST_ENDPOINT="${URL}/liddycam/_post"
-KEY="head -1 ~/.website-key-upload"
+KEY=`head -1 ~/.website-key-upload`
 
 token=`curl --silent $TOKEN_ENDPOINT`
 vtoken=`echo -n ${KEY}${token} | sha256sum | cut -f1 -d' '`
