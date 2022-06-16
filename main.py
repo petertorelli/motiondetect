@@ -13,6 +13,17 @@ import os
 # Motion detector on GPIO 18
 # Floodlight on GPIO 23
 
+class Uploader:
+	def __init__(self):
+		pass
+
+	def run(self, in_q):
+		print("Starting upload thread")
+		while True:
+			cmd = in_q.get()
+			print("Issuing command from queue...", cmd)
+			print(os.system(cmd))
+
 class Recorder:
 	def __init__(self):
 		self._state = "idle"
@@ -20,6 +31,7 @@ class Recorder:
 		self._startTime = 0
 		self._videos = 0
 		self._filename = ""
+		self._cmd_q = None
 
 	def _startVideo(self, name):
 		self._vidCapture = cv2.VideoCapture(0)
@@ -32,8 +44,8 @@ class Recorder:
 		self._vidCapture.release()
 		self._output.release()
 		cmd = "./pushvideo.sh %s" % self._filename
-		print(cmd)
-		print(os.system(cmd))
+		print("Sending command to queue...", cmd)
+		self._cmd_q.put(cmd)	
 
 	def _lightsOn(self):
 		GPIO.output(23, 1)
@@ -55,7 +67,9 @@ class Recorder:
 		else:
 			raise Exception("Unknown state %s" % state)
 
-	def run(self, in_q):
+	def run(self, in_q, cmd_q):
+		self._cmd_q = cmd_q
+		print("Starting recorder thread")
 		while True:
 			try:
 				data = in_q.get(False)
@@ -87,7 +101,7 @@ class Recorder:
 
 			if self._recording is True:
 				deltaSec = time.time() - self._startTime	
-				if deltaSec >= 15:
+				if deltaSec >= 30:
 					self._changeState('stop')
 				else:
 					ret, frame = self._vidCapture.read()
@@ -108,12 +122,15 @@ def motionHandler(channel):
 	if detect == 1:
 		messageQueue.put("start")
 
-
-recorder = Recorder();
+commandQueue = multiprocessing.Queue()
 messageQueue = multiprocessing.Queue()
-t1 = Thread(target=recorder.run, args=(messageQueue, ), daemon=True)
+uploader = Uploader();
+recorder = Recorder();
+t0 = Thread(target=uploader.run, args=(commandQueue, ), daemon=True)
+t1 = Thread(target=recorder.run, args=(messageQueue, commandQueue, ), daemon=True)
+t0.start()
 t1.start()
-print("Importing done, thread started...")
+print("Importing done, threads started...")
 
 signal.signal(signal.SIGINT, handler)
 
