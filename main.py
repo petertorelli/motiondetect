@@ -13,6 +13,8 @@ import os
 # Motion detector on GPIO 18
 # Floodlight on GPIO 23
 
+font = cv2.FONT_HERSHEY_SIMPLEX
+
 class Uploader:
 	def __init__(self):
 		pass
@@ -32,9 +34,13 @@ class Recorder:
 		self._videos = 0
 		self._filename = ""
 		self._cmd_q = None
+		self._startTimestamp = "timestamp"
+		self._lastStopTime = time.time()
+		self._todoQueue = []
 
 	def _startVideo(self, name):
 		self._vidCapture = cv2.VideoCapture(0)
+		self._vidCapture.set(cv2.CAP_PROP_BUFFERSIZE, 4)
 		self._vidCodec = cv2.VideoWriter_fourcc(*'avc1')
 		self._videos = self._videos + 1
 		self._filename = name
@@ -44,8 +50,11 @@ class Recorder:
 		self._vidCapture.release()
 		self._output.release()
 		cmd = "./pushvideo.sh %s" % self._filename
-		print("Sending command to queue...", cmd)
-		self._cmd_q.put(cmd)	
+		#print("Sending command to queue...", cmd)
+		#self._cmd_q.put(cmd)	
+		print("... Stored '%s' until upload timeout" % cmd)
+		self._todoQueue.append(cmd)
+		self._lastStopTime = time.time()
 
 	def _lightsOn(self):
 		GPIO.output(23, 1)
@@ -82,7 +91,8 @@ class Recorder:
 				if self._recording is False:
 					self._recording = True
 					dt = datetime.now()
-					self._startVideo(dt.strftime('%Y-%m-%d_%H-%M-%S.mp4'))
+					self._startTimestamp = dt.strftime('%Y-%m-%d_%H-%M-%S')
+					self._startVideo(("%s.mp4" % self._startTimestamp))
 					self._lightsOn()
 					self._startTime = time.time()
 				else:
@@ -101,14 +111,24 @@ class Recorder:
 
 			if self._recording is True:
 				deltaSec = time.time() - self._startTime	
-				if deltaSec >= 30:
+				if deltaSec >= 60:
 					self._changeState('stop')
 				else:
 					ret, frame = self._vidCapture.read()
+					dt = datetime.now()
+					ts = dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+					cv2.putText(frame, ts, (10, 470), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 					self._output.write(frame)
 			else:
 				time.sleep(0.100)
-		
+				# Don't try to run FFMPEG and OpenCV2 video.read() together!
+				# Wait 60 seconds since last time and then contact uploader
+				if len(self._todoQueue) > 0:
+					if time.time() - self._lastStopTime > 60:
+						print("60 seconds elapsed, sending %d commands..." % len(self._todoQueue))
+						for cmd in self._todoQueue:
+							cmd_q.put(cmd)
+						self._todoQueue = []
 
 def handler(signum, frame):
 	print("SIGINT")
@@ -122,7 +142,7 @@ def motionHandler(channel):
 	if detect == 1:
 		messageQueue.put("start")
 
-commandQueue = multiprocessing.Queue()
+commandQueue = multiprocessing.Queue(30)
 messageQueue = multiprocessing.Queue()
 uploader = Uploader();
 recorder = Recorder();
