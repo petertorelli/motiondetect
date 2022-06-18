@@ -13,7 +13,21 @@ import os
 # Motion detector on GPIO 18
 # Floodlight on GPIO 23
 
-font = cv2.FONT_HERSHEY_SIMPLEX
+FONT = cv2.FONT_HERSHEY_SIMPLEX
+# OpenCV2 is SUPER slow on an Rpi4.
+FPS = 10.0
+# This is the post processor that makes the thumbnail and
+# pushes everything up to the cloud.
+PUSHSCRIPT = "/home/peter/motiondetect/pushvideo.sh"
+# Sometimes the motion sensor doesn't catch subtle chewing,
+# so at a minimum record timeout to give it time to reset
+# the timer.
+MOTION_TIMEOUT_SEC = 60.0
+# This is how long we wait before uploading. I figure kitteh
+# walked away for at least a minute, then she's probably done
+# and now would be a good time to send the videos up to the
+# cloud.
+UPLOAD_TIMEOUT_SEC = 60.0
 
 class Uploader:
 	def __init__(self):
@@ -31,27 +45,23 @@ class Recorder:
 		self._state = "idle"
 		self._recording = False
 		self._startTime = 0
-		self._videos = 0
 		self._filename = ""
 		self._cmd_q = None
 		self._startTimestamp = "timestamp"
 		self._lastStopTime = time.time()
 		self._todoQueue = []
+		self._vidCapture = cv2.VideoCapture(0)
+		self._vidCapture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+		self._vidCodec = cv2.VideoWriter_fourcc(*'avc1')
 
 	def _startVideo(self, name):
-		self._vidCapture = cv2.VideoCapture(0)
-		self._vidCapture.set(cv2.CAP_PROP_BUFFERSIZE, 4)
-		self._vidCodec = cv2.VideoWriter_fourcc(*'avc1')
-		self._videos = self._videos + 1
 		self._filename = name
-		self._output = cv2.VideoWriter(name, self._vidCodec, 20.0, (640, 480))
+		self._output = cv2.VideoWriter(name, self._vidCodec, FPS, (640, 480))
 
 	def _stopVideo(self):
-		self._vidCapture.release()
+		#self._vidCapture.release()
 		self._output.release()
-		cmd = "./pushvideo.sh %s" % self._filename
-		#print("Sending command to queue...", cmd)
-		#self._cmd_q.put(cmd)	
+		cmd = "%s %s" % (PUSHSCRIPT, self._filename)
 		print("... Stored '%s' until upload timeout" % cmd)
 		self._todoQueue.append(cmd)
 		self._lastStopTime = time.time()
@@ -96,6 +106,7 @@ class Recorder:
 					self._lightsOn()
 					self._startTime = time.time()
 				else:
+					print("Motion detected, resetting timeout")
 					self._startTime = time.time()
 				self._changeState('run')
 			elif self._state == 'run':
@@ -111,21 +122,30 @@ class Recorder:
 
 			if self._recording is True:
 				deltaSec = time.time() - self._startTime	
-				if deltaSec >= 60:
+				if deltaSec >= MOTION_TIMEOUT_SEC:
 					self._changeState('stop')
+					time.sleep(0.100)
 				else:
+					t0 = time.time()
+
 					ret, frame = self._vidCapture.read()
 					dt = datetime.now()
 					ts = dt.strftime('%Y-%m-%d %H:%M:%S.%f')
-					cv2.putText(frame, ts, (10, 470), font, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+					cv2.putText(frame, ts, (10, 470), FONT, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
 					self._output.write(frame)
+
+					t1 = time.time()
+					dt = t1 - t0
+					msec10fps = 1 / FPS
+					if dt < msec10fps:
+						time.sleep(msec10fps - dt)
 			else:
 				time.sleep(0.100)
 				# Don't try to run FFMPEG and OpenCV2 video.read() together!
-				# Wait 60 seconds since last time and then contact uploader
+				# Wait UPLOAD_TIMEOUT_SEC seconds since last time and then contact uploader
 				if len(self._todoQueue) > 0:
-					if time.time() - self._lastStopTime > 60:
-						print("60 seconds elapsed, sending %d commands..." % len(self._todoQueue))
+					if time.time() - self._lastStopTime > UPLOAD_TIMEOUT_SEC:
+						print("Upload timeout: sending %d commands..." % len(self._todoQueue))
 						for cmd in self._todoQueue:
 							cmd_q.put(cmd)
 						self._todoQueue = []
