@@ -1,18 +1,30 @@
 #!/usr/bin/env bash
 
 filename=$1
+jpg=${filename%.*}.jpg
+
+if [ ! -f $filename ] ; then 
+	echo "$0: -E- First argument must be a valid file"
+	exit -1
+fi
+
+echo "$0: -I- Extracting JPEG"
+
+ffmpeg -v quiet  -i $filename -ss 00:00:1.000 -vframes 1 -vf scale=100:-1 $jpg
+
+if [ "$?" != "0" ] ; then
+	echo "$0: -E- Failed to extract JPEG"
+	exit -1
+fi
 
 URL="https://www.repete.io"
 TOKEN_ENDPOINT="${URL}/liddycam/_token"
 POST_ENDPOINT="${URL}/liddycam/_post"
 KEY=`head -1 ~/.website-key-upload`
-
 token=`curl --silent $TOKEN_ENDPOINT`
 vtoken=`echo -n ${KEY}${token} | sha256sum | cut -f1 -d' '`
-echo $KEY
-echo $token
-echo $vtoken
-echo $filename
+
+echo "$0: -I- POSTing '$filename'"
 
 curl \
 	--data-urlencode vtoken=$vtoken \
@@ -20,9 +32,7 @@ curl \
 	--data-urlencode "filedata@${filename}" \
 	$POST_ENDPOINT
 
-
-jpg=${filename%.*}.jpg
-ffmpeg -i $filename -ss 00:00:1.000 -vframes 1 -vf scale=100:-1 $jpg
+echo "$0: -I- POSTing '$jpg'"
 
 curl \
 	--data-urlencode vtoken=$vtoken \
@@ -30,5 +40,10 @@ curl \
 	--data-urlencode "filedata@${jpg}" \
 	$POST_ENDPOINT
 
+echo "$0: -I- Cleaning up"
+
 rm $jpg
 rm $filename
+
+echo "$0: -I- Done"
+
